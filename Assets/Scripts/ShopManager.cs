@@ -1,13 +1,13 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using TMPro; // Import TextMeshPro namespace
+using TMPro;
 using System;
-using System.Diagnostics;
+using System.Collections;
 
 public class ShopManager : MonoBehaviour
 {
     [Header("UI References")]
-    public TextMeshProUGUI currencyText; // Use TMP type instead of UnityEngine.UI.Text
+    public TextMeshProUGUI currencyText;
     public Transform shopContainer;
     public GameObject shopItemPrefab;
 
@@ -40,37 +40,36 @@ public class ShopManager : MonoBehaviour
 
     private void PopulateShop()
     {
-        // Clear any old shop entries before creating new ones
         foreach (Transform t in shopContainer)
             Destroy(t.gameObject);
 
-        // Spawn new shop item entries
         foreach (var it in itemsForSale)
         {
             GameObject go = Instantiate(shopItemPrefab, shopContainer);
 
-            // Use TMP for Name and Price text fields
             var nameTxt = go.transform.Find("Name").GetComponent<TextMeshProUGUI>();
             var priceTxt = go.transform.Find("Price").GetComponent<TextMeshProUGUI>();
             var iconImg = go.transform.Find("Icon").GetComponent<UnityEngine.UI.Image>();
             var buyBtn = go.transform.Find("BuyButton").GetComponent<UnityEngine.UI.Button>();
+            var denyOverlay = go.transform.Find("DenyOverlay")?.gameObject;
+
+            if (denyOverlay) denyOverlay.SetActive(false);
 
             if (nameTxt) nameTxt.text = it.itemName;
             if (priceTxt) priceTxt.text = it.price.ToString();
             if (iconImg && it.icon != null) iconImg.sprite = it.icon;
 
-            // Capture local reference so that listener uses the right item
             var currentItem = it;
-            buyBtn.onClick.AddListener(() => TryBuyItem(currentItem));
+            buyBtn.onClick.AddListener(() => TryBuyItem(currentItem, denyOverlay));
         }
     }
 
-    public void TryBuyItem(ShopItem item)
+    public void TryBuyItem(ShopItem item, GameObject denyOverlay)
     {
         var data = PlayerDataManager.Instance;
         if (data == null)
         {
-            UnityEngine.Debug.LogWarning("No PlayerDataManager found in scene!"); // Explicitly using UnityEngine.Debug
+            UnityEngine.Debug.LogWarning("No PlayerDataManager found in scene!");
             return;
         }
 
@@ -79,17 +78,27 @@ public class ShopManager : MonoBehaviour
             data.SpendCurrency(item.price);
             data.AddItem(item.itemName, item.itemID);
             UpdateCurrencyDisplay();
-            UnityEngine.Debug.Log($"Bought {item.itemName} (ID: {item.itemID}) for {item.price}"); // Explicitly using UnityEngine.Debug
+            UnityEngine.Debug.Log($"Bought {item.itemName} (ID: {item.itemID}) for {item.price}");
         }
         else
         {
-            UnityEngine.Debug.Log($"Cannot afford {item.itemName}"); // Explicitly using UnityEngine.Debug
+            UnityEngine.Debug.Log($"Cannot afford {item.itemName}");
+            if (denyOverlay != null)
+                StartCoroutine(ShowDenyOverlay(denyOverlay));
         }
+    }
+
+    private IEnumerator ShowDenyOverlay(GameObject overlay)
+    {
+        overlay.SetActive(true);
+        yield return new WaitForSeconds(2f);
+        overlay.SetActive(false);
     }
 
     public void OnBackButton()
     {
         string last = PlayerDataManager.Instance != null ? PlayerDataManager.Instance.LastSceneName : "MainScene";
+
         if (!string.IsNullOrEmpty(last))
             SceneManager.LoadScene(last);
         else

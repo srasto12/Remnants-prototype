@@ -16,6 +16,10 @@ public class PlayerDataManager : MonoBehaviour
     [Header("Scene Tracking")]
     public string LastSceneName;
 
+    [Header("Player Spawn Data")]
+    public Vector3 lastPlayerPosition;  // Store last player position before entering shop
+    public bool hasSavedPosition = false;
+
     [Serializable]
     public class InventoryItem
     {
@@ -46,7 +50,6 @@ public class PlayerDataManager : MonoBehaviour
 
     public void AddItem(string itemName, int itemID = -1)
     {
-        // Check if item already exists
         var existingItem = inventory.Find(i => i.itemID == itemID && i.itemName == itemName);
 
         if (existingItem != null)
@@ -69,5 +72,22 @@ public class PlayerDataManager : MonoBehaviour
     public void SaveLastScene()
     {
         LastSceneName = SceneManager.GetActiveScene().name;
+    }
+
+    // Save player position before entering the shop
+    public void SavePlayerPosition(Vector3 pos)
+    {
+        lastPlayerPosition = pos;
+        hasSavedPosition = true;
+    }
+
+    // Apply saved position after returning
+    public void RestorePlayerPosition(GameObject player)
+    {
+        if (hasSavedPosition)
+        {
+            player.transform.position = lastPlayerPosition;
+            hasSavedPosition = false; // reset once used
+        }
     }
 }
