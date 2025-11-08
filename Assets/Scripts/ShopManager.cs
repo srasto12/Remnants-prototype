@@ -1,11 +1,13 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using TMPro; // Import TextMeshPro namespace
 using System;
+using System.Diagnostics;
 
 public class ShopManager : MonoBehaviour
 {
     [Header("UI References")]
-    public UnityEngine.UI.Text currencyText;
+    public TextMeshProUGUI currencyText; // Use TMP type instead of UnityEngine.UI.Text
     public Transform shopContainer;
     public GameObject shopItemPrefab;
 
@@ -47,8 +49,9 @@ public class ShopManager : MonoBehaviour
         {
             GameObject go = Instantiate(shopItemPrefab, shopContainer);
 
-            var nameTxt = go.transform.Find("Name").GetComponent<UnityEngine.UI.Text>();
-            var priceTxt = go.transform.Find("Price").GetComponent<UnityEngine.UI.Text>();
+            // Use TMP for Name and Price text fields
+            var nameTxt = go.transform.Find("Name").GetComponent<TextMeshProUGUI>();
+            var priceTxt = go.transform.Find("Price").GetComponent<TextMeshProUGUI>();
             var iconImg = go.transform.Find("Icon").GetComponent<UnityEngine.UI.Image>();
             var buyBtn = go.transform.Find("BuyButton").GetComponent<UnityEngine.UI.Button>();
 
@@ -67,7 +70,7 @@ public class ShopManager : MonoBehaviour
         var data = PlayerDataManager.Instance;
         if (data == null)
         {
-            UnityEngine.Debug.LogWarning("No PlayerDataManager found in scene!"); 
+            UnityEngine.Debug.LogWarning("No PlayerDataManager found in scene!"); // Explicitly using UnityEngine.Debug
             return;
         }
 
@@ -76,11 +79,11 @@ public class ShopManager : MonoBehaviour
             data.SpendCurrency(item.price);
             data.AddItem(item.itemName, item.itemID);
             UpdateCurrencyDisplay();
-            UnityEngine.Debug.Log($"Bought {item.itemName} (ID: {item.itemID}) for {item.price}"); 
+            UnityEngine.Debug.Log($"Bought {item.itemName} (ID: {item.itemID}) for {item.price}"); // Explicitly using UnityEngine.Debug
         }
         else
         {
-            UnityEngine.Debug.Log($"Cannot afford {item.itemName}"); 
+            UnityEngine.Debug.Log($"Cannot afford {item.itemName}"); // Explicitly using UnityEngine.Debug
         }
     }
 
