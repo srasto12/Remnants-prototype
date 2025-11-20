@@ -11,6 +11,11 @@ public class ShopManager : MonoBehaviour
     public Transform shopContainer;
     public GameObject shopItemPrefab;
 
+    [Header("Inventory UI")]
+    public GameObject inventoryPanel;              // Assign in Inspector
+    public Transform inventoryContainer;           // Content area for inventory items
+    public GameObject inventoryItemPrefab;         // Prefab for displaying inventory entries
+
     [Serializable]
     public class ShopItem
     {
@@ -30,6 +35,52 @@ public class ShopManager : MonoBehaviour
 
         UpdateCurrencyDisplay();
         PopulateShop();
+
+        if (inventoryPanel != null)
+            inventoryPanel.SetActive(false);
+    }
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.I))
+        {
+            ToggleInventory();
+        }
+    }
+
+    private void ToggleInventory()
+    {
+        if (inventoryPanel == null) return;
+
+        bool isActive = !inventoryPanel.activeSelf;
+        inventoryPanel.SetActive(isActive);
+
+        if (isActive)
+        {
+            UpdateInventoryDisplay();
+            UpdateCurrencyDisplay();
+        }
+    }
+
+    private void UpdateInventoryDisplay()
+    {
+        if (inventoryContainer == null || inventoryItemPrefab == null) return;
+
+        foreach (Transform child in inventoryContainer)
+            Destroy(child.gameObject);
+
+        var data = PlayerDataManager.Instance;
+        if (data == null) return;
+
+        foreach (var item in data.inventory)
+        {
+            GameObject go = Instantiate(inventoryItemPrefab, inventoryContainer);
+            var nameTxt = go.transform.Find("Name")?.GetComponent<TextMeshProUGUI>();
+            var qtyTxt = go.transform.Find("Quantity")?.GetComponent<TextMeshProUGUI>();
+
+            if (nameTxt) nameTxt.text = item.itemName;
+            if (qtyTxt) qtyTxt.text = "x" + item.quantity;
+        }
     }
 
     private void UpdateCurrencyDisplay()
@@ -78,6 +129,9 @@ public class ShopManager : MonoBehaviour
             data.SpendCurrency(item.price);
             data.AddItem(item.itemName, item.itemID);
             UpdateCurrencyDisplay();
+            if (inventoryPanel != null && inventoryPanel.activeSelf)
+                UpdateInventoryDisplay();
+
             UnityEngine.Debug.Log($"Bought {item.itemName} (ID: {item.itemID}) for {item.price}");
         }
         else
