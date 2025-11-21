@@ -1,19 +1,43 @@
-﻿using UnityEngine;
+﻿using System;
+using UnityEngine;
 
 public class PlayerHealth : MonoBehaviour
 {
+    [Header("Health Settings")]
     public int maxHealth = 100;
-    private int currentHealth;
+    public int currentHealth;
+
+    [Header("Debug Damage (for testing only)")]
+    public bool allowDebugDamage = true;
+    public KeyCode debugDamageKey = KeyCode.H;
+    public int debugDamageAmount = 10;
+
+    // Event so the UI can listen and update
+    public event Action<int, int> OnHealthChanged; // (current, max)
 
     void Start()
     {
+        // Start at full health
         currentHealth = maxHealth;
+        NotifyHealthChanged();
     }
 
-    public void TakeDamage(int damage)
+    void Update()
     {
-        currentHealth -= damage;
-        Debug.Log("Player took damage! Current HP: " + currentHealth);
+        if (allowDebugDamage && Input.GetKeyDown(debugDamageKey))
+        {
+            TakeDamage(debugDamageAmount);
+        }
+    }
+
+    public void TakeDamage(int amount)
+    {
+        if (currentHealth <= 0) return;
+
+        amount = Mathf.Abs(amount);
+        currentHealth = Mathf.Clamp(currentHealth - amount, 0, maxHealth);
+
+        NotifyHealthChanged();
 
         if (currentHealth <= 0)
         {
@@ -21,9 +45,23 @@ public class PlayerHealth : MonoBehaviour
         }
     }
 
+    public void Heal(int amount)
+    {
+        if (currentHealth >= maxHealth) return;
+
+        amount = Mathf.Abs(amount);
+        currentHealth = Mathf.Clamp(currentHealth + amount, 0, maxHealth);
+
+        NotifyHealthChanged();
+    }
+
+    void NotifyHealthChanged()
+    {
+        OnHealthChanged?.Invoke(currentHealth, maxHealth);
+    }
+
     void Die()
     {
         Debug.Log("Player died!");
-        // 在這裡加上死亡動畫、重新開始遊戲、UI 更新等等
     }
 }
