@@ -19,30 +19,41 @@ public class Boss1ZombieAI : MonoBehaviour
     [SerializeField] string trigDie = "death";
     [SerializeField] string rageStateName = "rage";
     [SerializeField] string idleBlendStateName = "IdleWalkRun";
+    [SerializeField] string chargeStateName = "charge";
     [SerializeField] float rageCrossFade = 0.05f;
+    [SerializeField] string dieStateName = "death";
+
+    // hash
+    int _hashIdle, _hashRage, _hashCharge, _hashMelee, _hashSpike, _hashDie;
 
     [Header("Movement")]
     public float detectRange = 10f;
     public float walkSpeed = 2f;
     public float runSpeed = 4.5f;
 
-    [Header("Melee Attack")]
+    [Header("Melee")]
     public float meleeRange = 2.2f;
+    public float meleeTriggerPadding = 0.25f;
     public int meleeDamage = 25;
 
-    [Header("Charge Attack")]
-    [SerializeField] float chargePushSpeed = 12f;   // 衝刺速度
-    [SerializeField] float chargeMaxTime = 1.2f;  // 最長衝刺時間（保險）
-    [SerializeField] float chargeStopRange = 1.8f;  // 與玩家距離小於此值就停
-    [SerializeField] float chargeObstacleStopRadius = 0.5f; // 障礙探測半徑（SphereCast）
+    [Header("Charge")]
+    [SerializeField] float chargePushSpeed = 12f;
+    [SerializeField] float chargeMaxTime = 1.2f;
+    [SerializeField] float chargeObstacleStopRadius = 0.5f;
+    [SerializeField] float chargeDistance = 8f;     // 固定衝刺距離
 
-    [Header("Shockwave (Projectile)")]
-    public Transform shockwaveSpawn;                // 能量波生成點（可用胸口/手掌），未設則用 transform
-    public GameObject shockwaveProjectilePrefab;    // 指到能量波預置
-    public float shockwaveSpeed = 14f;              // 投射物速度
-    public float shockwaveLife = 3f;               // 存活時間（秒）
-    public int shockwaveDamage = 18;              // 傷害
-    public float shockwaveHitRadius = 0.3f;         // 命中半徑（Projectile 也會用到）
+    bool _charging;
+    float _chargeEndTime;
+    Vector3 _chargeDir;
+    Vector3 _chargeStartPos;                        // 衝刺起點
+
+    [Header("Shockwave")]
+    public Transform shockwaveSpawn;
+    public GameObject shockwaveProjectilePrefab;
+    public float shockwaveSpeed = 14f;
+    public float shockwaveLife = 3f;
+    public int shockwaveDamage = 18;
+    public float shockwaveHitRadius = 0.3f;
 
     [Header("HP")]
     public int maxHP = 600;
@@ -60,20 +71,20 @@ public class Boss1ZombieAI : MonoBehaviour
     [SerializeField] float repathDistance = 0.6f;
     [SerializeField] float speedDamp = 0.05f;
     [SerializeField] bool useDesiredVelocity = true;
-    Vector3 _lastDest;
     float _nextRepathAt;
 
-    // Charge 狀態
-    bool _charging;
-    float _chargeEndTime;
+    [Header("Audio")]
+    public AudioClip rageSfx;
+    [Range(0f, 1f)]
+    public float rageVolume = 1f;
+    public float rageMinDistance = 5f;
+    public float rageMaxDistance = 40f;
 
     // 攻擊看門狗 / Fallback
     float _attackForceExitAt = 0f;
     [SerializeField] string meleeStateName = "attack";
-    [SerializeField] string chargeStateName = "charge";
     [SerializeField] string spikeStateName = "attackSpike";
 
-    // internal
     int _hp;
     bool _invincible = true;
     State _state = State.Idle;
@@ -94,6 +105,13 @@ public class Boss1ZombieAI : MonoBehaviour
             animator.updateMode = AnimatorUpdateMode.Normal;
             animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
             animator.SetFloat(speedParam, 0f);
+
+            _hashIdle = !string.IsNullOrEmpty(idleBlendStateName) ? Animator.StringToHash(idleBlendStateName) : 0;
+            _hashRage = !string.IsNullOrEmpty(rageStateName) ? Animator.StringToHash(rageStateName) : 0;
+            _hashCharge = !string.IsNullOrEmpty(chargeStateName) ? Animator.StringToHash(chargeStateName) : 0;
+            _hashMelee = !string.IsNullOrEmpty(meleeStateName) ? Animator.StringToHash(meleeStateName) : 0;
+            _hashSpike = !string.IsNullOrEmpty(spikeStateName) ? Animator.StringToHash(spikeStateName) : 0;
+            _hashDie   = !string.IsNullOrEmpty(dieStateName) ? Animator.StringToHash(dieStateName) : 0;
         }
 
         if (agent)
@@ -125,8 +143,8 @@ public class Boss1ZombieAI : MonoBehaviour
         EnsureAgentOnNavMesh();
         SafeSetStopped(true);
 
-        if (animator && !string.IsNullOrEmpty(idleBlendStateName))
-            animator.CrossFadeInFixedTime(idleBlendStateName, 0.1f, 0, 0f);
+        if (_hashIdle != 0)
+            animator.CrossFadeInFixedTime(_hashIdle, 0.1f, 0, 0f);
     }
 
     void Update()
@@ -135,14 +153,14 @@ public class Boss1ZombieAI : MonoBehaviour
 
         switch (_state)
         {
-            case State.Idle: IdleUpdate(); break;
-            case State.Rage: break; // 協程控制
+            case State.Idle:  IdleUpdate();  break;
+            case State.Rage:                 break;
             case State.Chase: ChaseUpdate(); break;
             case State.Attack: AttackUpdate(); break;
         }
 
-        // BlendTree speed（m/s）
-        if (animator)
+        // 非 Charge 時才推 BlendTree 速度
+        if (animator && !_charging)
         {
             float spd = 0f;
             if (AgentActiveOnNavMesh())
@@ -166,37 +184,49 @@ public class Boss1ZombieAI : MonoBehaviour
         _raging = true;
         _state = State.Rage;
 
-        if (animator)
+        if (rageSfx)
         {
-            if (!animator.HasState(0, Animator.StringToHash(rageStateName)))
-                Debug.LogError("[BossAI] Animator state '" + rageStateName + "' not found on Layer 0.");
-            animator.CrossFadeInFixedTime(rageStateName, rageCrossFade, 0, 0f);
+            AudioSource src = gameObject.AddComponent<AudioSource>();
+            src.clip = rageSfx;
+            src.volume = rageVolume;
+            src.spatialBlend = 1f; // 3D
+            src.minDistance = rageMinDistance;
+            src.maxDistance = rageMaxDistance;
+            src.rolloffMode = AudioRolloffMode.Linear;
+            src.Play();
+            Destroy(src, rageSfx.length);
         }
-        yield return WaitForStateToFinish(rageStateName);
+
+        if (_hashRage != 0)
+            animator.CrossFadeInFixedTime(_hashRage, rageCrossFade, 0, 0f);
+        else
+            Debug.LogError("[BossAI] Rage state name not found on Animator.");
+
+        yield return WaitForStateToFinish(_hashRage);
 
         _invincible = false;
 
         EnsureAgentOnNavMesh();
         SafeSetStopped(false);
-        if (player) { SafeSetDestination(player.position); _lastDest = player.position; }
+        if (player) { SafeSetDestination(player.position); }
 
         _nextRepathAt = 0f;
-        _nextSkillTime = Time.time + 1.0f; // 緩衝 1 秒再出招
+        _nextSkillTime = Time.time + 1.0f;
         _state = State.Chase;
     }
 
-    IEnumerator WaitForStateToFinish(string stateName, int layer = 0, float doneNormTime = 0.98f)
+    IEnumerator WaitForStateToFinish(int stateHash, int layer = 0, float doneNormTime = 0.98f)
     {
         while (true)
         {
             var info = animator.GetCurrentAnimatorStateInfo(layer);
-            if (info.IsName(stateName) && !animator.IsInTransition(layer)) break;
+            if (info.shortNameHash == stateHash && !animator.IsInTransition(layer)) break;
             yield return null;
         }
         while (true)
         {
             var info = animator.GetCurrentAnimatorStateInfo(layer);
-            if (info.IsName(stateName) && !animator.IsInTransition(layer) && info.normalizedTime >= doneNormTime)
+            if (info.shortNameHash == stateHash && !animator.IsInTransition(layer) && info.normalizedTime >= doneNormTime)
                 break;
             yield return null;
         }
@@ -207,7 +237,6 @@ public class Boss1ZombieAI : MonoBehaviour
         EnsureAgentOnNavMesh();
         SafeSetStopped(false);
 
-        // 週期性 Repath（位置變化夠大才重下）
         if (Time.time >= _nextRepathAt && AgentActiveOnNavMesh())
         {
             _nextRepathAt = Time.time + chaseRepathInterval;
@@ -218,12 +247,10 @@ public class Boss1ZombieAI : MonoBehaviour
                 if (!agent.hasPath || (agent.destination - want).sqrMagnitude > repathDistance * repathDistance)
                 {
                     agent.SetDestination(want);
-                    _lastDest = want;
                 }
             }
         }
 
-        // 調速與轉身
         float dist = player ? Vector3.Distance(transform.position, player.position) : Mathf.Infinity;
         if (AgentActiveOnNavMesh())
             agent.speed = (dist > 6f) ? runSpeed : walkSpeed;
@@ -238,22 +265,28 @@ public class Boss1ZombieAI : MonoBehaviour
             }
         }
 
-        // 技能（完全隨機，不看距離）
+        // 技能時機（此示例先固定觸發 Charge）
         if (Time.time >= _nextSkillTime)
         {
-            int roll = Random.Range(0, 3); // 0,1,2
-            if (roll == 0) TriggerSkill(trigMelee);
-            else if (roll == 1) TriggerSkill(trigCharge);
-            else TriggerSkill(trigSpike);
-
+            float meleeTriggerRange = meleeRange + meleeTriggerPadding;
+            if (dist <= meleeTriggerRange)
+            {
+                // 距離夠 → 直接執行近戰
+                TriggerSkill(trigMelee);
+            }
+            else
+            {
+                // 距離不夠 → 在 衝刺 / 衝擊波 中二選一
+                if (Random.value < 0.5f) TriggerSkill(trigCharge);
+                else TriggerSkill(trigSpike);
+            }
             _nextSkillTime = Time.time + globalSkillCooldown;
         }
     }
 
     void AttackUpdate()
     {
-        // 攻擊時也維持面向玩家
-        if (player)
+        if (!_charging && player)
         {
             Vector3 dir = player.position - transform.position; dir.y = 0f;
             if (dir.sqrMagnitude > 0.0001f)
@@ -263,37 +296,43 @@ public class Boss1ZombieAI : MonoBehaviour
             }
         }
 
-        // A) Charge 期間：持續追到玩家身邊（含障礙偵測）
         if (_charging)
         {
-            if (AgentActiveOnNavMesh()) agent.isStopped = true; // 停用 NavMesh 推進，改用程式位移
+            if (AgentActiveOnNavMesh()) agent.isStopped = true;
 
-            // 追蹤玩家方向（半追尾）
-            Vector3 toPlayer = (player ? (player.position - transform.position) : transform.forward);
-            toPlayer.y = 0f;
-            if (toPlayer.sqrMagnitude > 0.0001f)
-                toPlayer.Normalize();
-            transform.position += toPlayer * chargePushSpeed * Time.deltaTime;
+            // 固定朝衝刺方向前進（不再追玩家）
+            transform.rotation = Quaternion.LookRotation(_chargeDir);
 
-            // 碰撞/障礙提前停止
-            if (Physics.SphereCast(transform.position + Vector3.up * 0.5f, chargeObstacleStopRadius, toPlayer, out var hit, 0.8f, ~0, QueryTriggerInteraction.Ignore))
+            if (_hashCharge != 0)
             {
-                // 撞到牆或玩家 → 停
-                EndChargeToChase();
+                var st = animator.GetCurrentAnimatorStateInfo(0);
+                if (!animator.IsInTransition(0) && st.shortNameHash != _hashCharge)
+                    animator.CrossFadeInFixedTime(_hashCharge, 0.05f, 0, 0f);
+            }
+
+            transform.position += _chargeDir * chargePushSpeed * Time.deltaTime;
+
+            if (AgentActiveOnNavMesh()) agent.nextPosition = transform.position;
+
+            // 碰撞提前終止
+            if (Physics.SphereCast(transform.position + Vector3.up * 0.5f, chargeObstacleStopRadius, _chargeDir,
+                out var hit, 0.8f, ~0, QueryTriggerInteraction.Ignore))
+            {
+                StopCharge();
                 return;
             }
 
-            // 到玩家身邊或時間到 → 停
-            float dist = player ? Vector3.Distance(transform.position, player.position) : Mathf.Infinity;
-            if (dist <= chargeStopRange || Time.time >= _chargeEndTime)
+            // 以「沿衝刺方向的位移」判斷是否到達距離上限或時間上限
+            float traveled = Vector3.Dot(transform.position - _chargeStartPos, _chargeDir);
+            if (traveled >= chargeDistance || Time.time >= _chargeEndTime)
             {
-                EndChargeToChase();
+                StopCharge();
                 return;
             }
+
             return;
         }
 
-        // B) 攻擊看門狗：超時自動回 Chase
         if (_attackForceExitAt > 0f && Time.time >= _attackForceExitAt)
         {
             _attackForceExitAt = 0f;
@@ -301,12 +340,11 @@ public class Boss1ZombieAI : MonoBehaviour
             return;
         }
 
-        // C) Fallback：clip 播完回 Chase
         var info = animator.GetCurrentAnimatorStateInfo(0);
         bool inAtk =
-            info.IsName(meleeStateName) ||
-            info.IsName(chargeStateName) ||
-            info.IsName(spikeStateName);
+            info.shortNameHash == _hashMelee ||
+            info.shortNameHash == _hashCharge ||
+            info.shortNameHash == _hashSpike;
 
         if (!animator.IsInTransition(0) && inAtk && info.normalizedTime >= 0.98f)
         {
@@ -314,7 +352,7 @@ public class Boss1ZombieAI : MonoBehaviour
         }
     }
 
-    void EndChargeToChase()
+    void StopCharge()
     {
         _charging = false;
         BackToChase();
@@ -330,6 +368,9 @@ public class Boss1ZombieAI : MonoBehaviour
             if (player) SafeSetDestination(player.position);
         }
         animator.speed = 1f;
+
+        if (_hashIdle != 0)
+            animator.CrossFadeInFixedTime(_hashIdle, 0.08f, 0, 0f);
     }
 
     void TriggerSkill(string trig)
@@ -340,7 +381,6 @@ public class Boss1ZombieAI : MonoBehaviour
         animator.ResetTrigger(trigSpike);
         animator.SetTrigger(trig);
 
-        // 確保攻擊時動畫 1 倍速
         animator.speed = 1f;
 
         if (AgentActiveOnNavMesh())
@@ -365,18 +405,39 @@ public class Boss1ZombieAI : MonoBehaviour
         if (_hp <= 0)
         {
             _state = State.Dead;
-            if (agent) agent.enabled = true;
+
+            if (AgentActiveOnNavMesh())
+            {
+                agent.isStopped = true;
+                agent.ResetPath();
+                agent.enabled = false;
+            }
+
+            var col = GetComponent<Collider>();
+            if (col) col.enabled = false;
+
+            animator.ResetTrigger(trigMelee);
+            animator.ResetTrigger(trigCharge);
+            animator.ResetTrigger(trigSpike);
             animator.SetTrigger(trigDie);
+
+            if (_hashDie != 0) StartCoroutine(DespawnOnAnimDone(_hashDie, 0));
+            else StartCoroutine(DespawnAfterSeconds(3.0f));
         }
     }
 
-    // ========== 動畫事件（Event） ========
-
-    // 近戰
+    // ===== Animation Events =====
     public void OnMeleeStart()
     {
         if (AgentActiveOnNavMesh()) agent.isStopped = true;
+
+        float meleeTriggerRange = meleeRange + meleeTriggerPadding;
+        if (player && Vector3.Distance(transform.position, player.position) > meleeTriggerRange + 0.05f)
+        {
+            BackToChase();
+        }
     }
+
     public void OnMeleeHit()
     {
         if (!player) return;
@@ -385,41 +446,62 @@ public class Boss1ZombieAI : MonoBehaviour
     }
     public void OnMeleeEnd() => BackToChase();
 
-    // Charge
+    // Charge 起手
     public void OnChargeStart()
     {
+        if (_charging) return;
+
         _charging = true;
         _chargeEndTime = Time.time + chargeMaxTime;
-        if (AgentActiveOnNavMesh()) agent.isStopped = true;
-    }
-    //public void OnChargeEnd() => EndChargeToChase();
 
-    // Shockwave（投射物）
+        // 固定用當下 forward 作為衝刺方向與距離參考
+        _chargeStartPos = transform.position;
+        _chargeDir = transform.forward;
+        _chargeDir.y = 0f;
+        if (_chargeDir.sqrMagnitude < 0.0001f) _chargeDir = transform.forward;
+        _chargeDir.Normalize();
+
+        if (AgentActiveOnNavMesh())
+        {
+            agent.isStopped = true;
+            agent.ResetPath(); // 確保不再嘗試跟隨玩家
+        }
+
+        transform.rotation = Quaternion.LookRotation(_chargeDir);
+
+        if (_hashCharge != 0)
+            animator.CrossFadeInFixedTime(_hashCharge, 0.05f, 0, 0f);
+    }
+
+    // Shockwave
     public void OnShockwaveEmit()
     {
-        if (!shockwaveProjectilePrefab) { Debug.LogWarning($"{name}: shockwaveProjectilePrefab not assigned."); return; }
+        if (!shockwaveProjectilePrefab)
+        {
+            Debug.LogWarning($"{name}: shockwaveProjectilePrefab not assigned.", this);
+            return;
+        }
 
         Vector3 origin = shockwaveSpawn ? shockwaveSpawn.position : transform.position + Vector3.up * 1.0f;
         Vector3 dir = player ? (player.position + Vector3.up * 0.9f - origin) : transform.forward;
-        dir.y = 0f; // 視覺較穩定（需要仰角就註解掉）
+        dir.y = 0f;
         if (dir.sqrMagnitude < 0.0001f) dir = transform.forward;
         dir.Normalize();
 
         var go = Instantiate(shockwaveProjectilePrefab, origin, Quaternion.LookRotation(dir, Vector3.up));
         var proj = go.GetComponent<ShockwaveProjectile>();
-        if (proj)
-        {
-            proj.Initialize(dir, shockwaveSpeed, shockwaveDamage, shockwaveLife, shockwaveHitRadius, this);
-        }
-        else
-        {
-            // 無腳本也盡量推進（最簡單線性位移）
-            go.AddComponent<ShockwaveProjectile>().Initialize(dir, shockwaveSpeed, shockwaveDamage, shockwaveLife, shockwaveHitRadius, this);
-        }
+        if (!proj) proj = go.AddComponent<ShockwaveProjectile>();
+        proj.Initialize(dir, shockwaveSpeed, shockwaveDamage, shockwaveLife, shockwaveHitRadius, this);
     }
     public void OnShockwaveEnd() => BackToChase();
 
-    // =========== 安全封裝 / 工具 =============
+    public void OnDeathEnd()
+    {
+        if (_state != State.Dead) return;
+        Destroy(gameObject);
+    }
+
+    // ===== utils =====
     bool AgentActiveOnNavMesh() => agent && agent.enabled && agent.isOnNavMesh;
 
     void EnsureAgentOnNavMesh()
@@ -430,9 +512,7 @@ public class Boss1ZombieAI : MonoBehaviour
         if (!agent.isOnNavMesh && autoWarpToNavMesh)
         {
             if (NavMesh.SamplePosition(transform.position, out var hit, warpProbeRadius, NavMesh.AllAreas))
-            {
                 agent.Warp(hit.position);
-            }
             else
             {
                 var probe = transform.position + Vector3.up * 0.5f;
@@ -454,16 +534,50 @@ public class Boss1ZombieAI : MonoBehaviour
         return agent.SetDestination(pos);
     }
 
+    IEnumerator DespawnOnAnimDone(int stateHash, int layer, float doneNormTime = 0.98f)
+    {
+        while (true)
+        {
+            var st = animator.GetCurrentAnimatorStateInfo(layer);
+            if (st.shortNameHash == stateHash && !animator.IsInTransition(layer)) break;
+            yield return null;
+        }
+        while (true)
+        {
+            var st = animator.GetCurrentAnimatorStateInfo(layer);
+            if (st.shortNameHash == stateHash && !animator.IsInTransition(layer) && st.normalizedTime >= doneNormTime)
+                break;
+            yield return null;
+        }
+        Destroy(gameObject);
+    }
+
+    IEnumerator DespawnAfterSeconds(float seconds)
+    {
+        yield return new WaitForSeconds(seconds);
+        Destroy(gameObject);
+    }
+
 #if UNITY_EDITOR
     void OnGUI()
     {
         if (!agent) return;
+
+        bool active = agent.enabled && agent.isOnNavMesh;
+
+        string stopped = active ? agent.isStopped.ToString() : "-";
+        string hasPath = active ? agent.hasPath.ToString() : "-";
+        string pending = active ? agent.pathPending.ToString() : "-";
+        string status  = active ? agent.pathStatus.ToString() : "-";
+        string vel     = active ? agent.velocity.magnitude.ToString("F2") : "0.00";
+        string remDist = (active && agent.hasPath) ? agent.remainingDistance.ToString("F2") : "-";
+
         string s =
             "STATE=" + _state + " inv=" + _invincible + "\n" +
-            "enabled=" + agent.enabled + " onNav=" + agent.isOnNavMesh + " stopped=" + agent.isStopped + "\n" +
-            "hasPath=" + agent.hasPath + " pending=" + agent.pathPending + " status=" + agent.pathStatus + "\n" +
-            "vel=" + (AgentActiveOnNavMesh() ? agent.velocity.magnitude.ToString("F2") : "0.00") +
-            " destDist=" + (agent.hasPath ? agent.remainingDistance.ToString("F2") : "-");
+            "enabled=" + agent.enabled + " onNav=" + agent.isOnNavMesh + " stopped=" + stopped + "\n" +
+            "hasPath=" + hasPath + " pending=" + pending + " status=" + status + "\n" +
+            "vel=" + vel + " destDist=" + remDist;
+
         GUI.Label(new Rect(15, 15, 560, 80), s);
     }
 #endif
